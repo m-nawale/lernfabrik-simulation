@@ -1,8 +1,17 @@
-[tool.black]
-line-length = 100
-target-version = ["py311"]
+[project]
+name = "lernfabrik-simulation"
+version = "0.1.0"
+description = "Learning factory simulation and dashboard for circular production"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+  { name = "Your Name", email = "your@email.com" }
+]
 
-[tool.ruff]
-line-length = 100
-select = ["E","F","I","B"]
-ignore = []
+dependencies = [
+    "simpy>=4.0",
+    "pandas>=2.0",
+    "plotly>=5.20",
+    "dash>=2.17",
+    "pyyaml>=6.0",
+]

@@ -3,7 +3,9 @@ meta:
   horizon_min: 480           # one shift in minutes (8h)
   scenario: "BASELINE"       # scenario name
   data_source: "ASSUMED"     # placeholders until measured
-  seed: 42            # random seed for reproducibility
+  warmdown_min: 15           # warmdown time at the end of the shift
+  sample_every_min: 10   # snapshot cadence for inventory/WIP
+  seed: 42                   # random seed for reproducibility
 
 resources:
   workers_total: 20       # total operators available in the learning factory (assumption)
@@ -19,9 +21,6 @@ buffers:
   lager2:            { capacity: 100 }    # second buffer feeding downstream steps
   scrap_bin:         { capacity: 999999 } # <- for failed inspections
   warenannahme:      { capacity: 200 }    # goods receipt for returns
-  after_pressen_1: { capacity: 9999 }    # temporary WIP after the first press REMOVE THIS LATER
-  after_pressen_2: { capacity: 9999 }   # TEMP: remove once pressen_3 is connected
-  after_pressen_3: { capacity: 9999 }   # TEMP: remove once pressen_4 is connected
 
 arrivals:
   new_orders:                      # incoming demand
@@ -32,30 +31,52 @@ arrivals:
     batch_mean: 5                  # avg 5 per return
     interarrival_min: 10           # every 10 minutes a batch arrives
 
+factors:
+  ef_co2_per_kwh: 0.35     # kg CO2 per kWh (placeholder for your grid)
+  kwh_per_m3_air: 0.12     # compressor specific energy (kWh per m³), placeholder
+
 forward_flow:
-# NOTE: lager1/lager2 feed the main line before pressen_1 (reman + new parts merge here)
-  - { id: pressen_1,     machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1 }
-  - { id: pressen_2,     machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1 }
-  - { id: pressen_3,     machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1 }
-  - { id: pressen_4,     machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1 }
-  - { id: fuegen_1,      machines: 1, workers_required: 1, cycle_time_s: 40, batch: 1 }
-  - { id: magnetisieren, machines: 1, workers_required: 1, cycle_time_s: 50, batch: 1 }
-  - { id: schrauben_1,   machines: 1, workers_required: 1, cycle_time_s: 35, batch: 1 }
-  - { id: fuegen_2,      machines: 1, workers_required: 1, cycle_time_s: 40, batch: 1 }
-  - { id: schrauben_2,   machines: 1, workers_required: 1, cycle_time_s: 35, batch: 1 }
-  - { id: pruefstand,    machines: 1, workers_required: 1, cycle_time_s: 45, batch: 1 }
-  - { id: kunde,         type: "sink" }   # end of forward flow
+  - { id: pressen_1, machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.00 }
+  - { id: pressen_2, machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.00 }
+  - { id: pressen_3, machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.00 }
+  - { id: pressen_4, machines: 1, workers_required: 1, cycle_time_s: 30, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.00 }
+
+  - { id: fuegen_1, machines: 1, workers_required: 1, cycle_time_s: 40, batch: 1,
+      kwh_per_unit: 0.02, air_m3_per_unit: 0.50 }
+  - { id: magnetisieren, machines: 1, workers_required: 1, cycle_time_s: 50, batch: 1,
+      kwh_per_unit: 0.05, air_m3_per_unit: 0.00 }
+  - { id: schrauben_1, machines: 1, workers_required: 1, cycle_time_s: 35, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.30 }
+
+  - { id: fuegen_2, machines: 1, workers_required: 1, cycle_time_s: 40, batch: 1,
+      kwh_per_unit: 0.02, air_m3_per_unit: 0.50 }
+  - { id: schrauben_2, machines: 1, workers_required: 1, cycle_time_s: 35, batch: 1,
+      kwh_per_unit: 0.01, air_m3_per_unit: 0.30 }
+  - { id: pruefstand, machines: 1, workers_required: 1, cycle_time_s: 45, batch: 1,
+      kwh_per_unit: 0.03, air_m3_per_unit: 0.00 }
+
+  - { id: kunde, type: "sink" }
+
 
 reverse_flow:
-  - { id: warenannahme, workers_required: 1, cycle_time_s: 20 }                   # optional pre-step
-  - { id: befundung_1,  workers_required: 1, cycle_time_s: 40, yield_pass: 0.85 }
-  - { id: demontage,    workers_required: 3, cycle_time_s: 120 }                  # main capacity driver
-  - { id: blaue_kisten_gate, type: "buffer_push", target: "blaue_kisten" }        # WIP bin from slides
-  - { id: reinigung,    workers_required: 1, cycle_time_s: 90,  batch: 5 }        # used in "detailed" mode
-  - { id: befundung_2,  workers_required: 1, cycle_time_s: 50, yield_pass: 0.80 } # used in "detailed" mode
-  - { id: reman_lager_gate, type: "buffer_push", target: "reman_lager" }
-  - { id: merge_to_lager,   type: "merge", targets: ["lager1","lager2"] }         # feeds Pressen → Fügen/Schrauben
+  shortcut_delay_min: 5   # was hardcoded; now configurable
+  steps:
+    - { id: warenannahme, workers_required: 1, cycle_time_s: 20 }                   # optional pre-step
+    - { id: befundung_1,  workers_required: 1, cycle_time_s: 40, yield_pass: 0.85 }
+    - { id: demontage,    workers_required: 3, cycle_time_s: 120 }                  # main capacity driver
+    - { id: blaue_kisten_gate, type: "buffer_push", target: "blaue_kisten" }        # WIP bin from slides
+    - { id: reinigung,    workers_required: 1, cycle_time_s: 90,  batch: 5 }        # used in "detailed" mode
+    - { id: befundung_2,  workers_required: 1, cycle_time_s: 50, yield_pass: 0.80 } # used in "detailed" mode
+    - { id: reman_lager_gate, type: "buffer_push", target: "reman_lager" }
+    - { id: merge_to_lager,   type: "merge", targets: ["lager1","lager2"] }         # feeds Pressen → Fügen/Schrauben
 
+intensity_defaults:
+  kwh_per_unit: 0.01
+  air_m3_per_unit: 0.0
 
 rules:                                          # special business rules
   unknown_variant_must_full_demount: true       # if product unknown → full teardown
@@ -63,3 +84,30 @@ rules:                                          # special business rules
   mispick_prob_without_traceability: 0.03       # 3% chance of wrong part picked
   time_penalty_per_code_s: 10                   # scanning penalty in seconds if no traceability
   reverse_mode: "detailed"
+
+costs:
+  energy_eur_per_kwh: 0.75
+  air_eur_per_m3: 0.60
+  labor_eur_per_min: 0.50
+  material_new_eur_per_unit: 12.0
+  material_reman_eur_per_unit: 6.0
+  scrap_disposal_eur_per_unit: 1.0
+  return_premium_eur_per_unit: 0.5
+
+reliability:
+  default:
+    mtbf_min: 999999   # effectively “off” until you tune
+    mttr_min: 10
+    mttr_dist: "fixed"  # fixed | normal
+    mttr_sigma_min: 0
+  stations:
+    pressen_1: { mtbf_min: 1200, mttr_min: 8,  mttr_dist: "normal", mttr_sigma_min: 2 }
+    pressen_2: { mtbf_min: 1200, mttr_min: 8,  mttr_dist: "normal", mttr_sigma_min: 2 }
+    pressen_3: { mtbf_min: 1200, mttr_min: 8,  mttr_dist: "normal", mttr_sigma_min: 2 }
+    pressen_4: { mtbf_min: 1200, mttr_min: 8,  mttr_dist: "normal", mttr_sigma_min: 2 }
+    fuegen_1:  { mtbf_min: 1800, mttr_min: 10, mttr_dist: "fixed"  }
+    magnetisieren: { mtbf_min: 1600, mttr_min: 12, mttr_dist: "fixed" }
+    schrauben_1: { mtbf_min: 1400, mttr_min: 8,  mttr_dist: "fixed" }
+    fuegen_2:  { mtbf_min: 1800, mttr_min: 10, mttr_dist: "fixed" }
+    schrauben_2: { mtbf_min: 1400, mttr_min: 8,  mttr_dist: "fixed" }
+    pruefstand: { mtbf_min: 2000, mttr_min: 12, mttr_dist: "fixed" }
